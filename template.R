@@ -9,7 +9,7 @@
 # Author: Alex Frankell
 # Date: 2021-06-22
 
-setwd("/Volumes/proj-tracerx-lung/tctProjects/frankella/archer_ctdna/")
+setwd("/Volumes/proj-tracerx-lung/tctProjects/frankella/mrd_methods_dev/")
 
 ####################################################
 #### Source required functions & load libraries ####
@@ -34,7 +34,7 @@ date <- gsub("-","",Sys.Date())
 
 # the output folder paths will already exist if specified in following args, if not use default specified here #
 
-outputs.folder <- "plots/template/"  ## this folder must already exist  
+outputs.folder <- "outputs/template/"  ## this folder must already exist  
 
 outputs.folder <- paste0( outputs.folder, date, "/" )
 
