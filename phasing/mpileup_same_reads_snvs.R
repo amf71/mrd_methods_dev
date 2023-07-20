@@ -397,7 +397,7 @@ write.csv(mpileup_results, out_file_all_raw, row.names = FALSE)
 
 # Now merge together the HAPCUT phasing to get parental alleles phased to mutations ------------------------------
 
-phasing_vcf_path <- '/nemo/project/proj-tracerx-lung/tctProjects/frankella/ctDNA_methods_dev/outputs/mut_cn_tracking/20230418/LTX0064_SU_N_snps_muts_phased.haplotype.phased.VCF'
+phasing_vcf_path <- 'outputs/phasing/20230627/LTX0064_SU_N.snps_phased.frag.het.only.haplotype.phased.VCF'
 phasing_vcf <- read.vcfR( phasing_vcf_path )
 
 # Just extract info we need
@@ -416,7 +416,7 @@ phased[, block_size_Mb := signif(max(pos)-min(pos)/1000000, 2), by = block_id ]
 mpileup_results <- as.data.table(mpileup_results)
 
 # associate the hetSNPs with a nearby mutation
-mpileup_results[ type == 'mut', mutid := paste(chr, pos, ref, sep = ':') ]
+mpileup_results[, mutid := paste(chr, pos, ref, sep = ':') ]
 
 # there is probably a faster/cleaner way to do this... 
 
@@ -434,7 +434,7 @@ collate_nearest_snps <- function(mut_id, mpileup, max_phasing_dist, n_snps){
                                  chr == mutinfo$chr_mut & 
                                  pos > mutinfo$pos - max_phasing_dist &
                                  pos < mutinfo$pos + max_phasing_dist, 
-                                  .( chr, pos, ref, counts, mut_read, wt_read,
+                                  .( chr, pos, ref, alt, counts, mut_read, wt_read,
                                      dist = abs(pos - mutinfo$pos), id = mutid ) ]
   setnames(nearbysnps, paste0( names(nearbysnps), '_hetsnp'))
 
@@ -472,14 +472,10 @@ phased_muts[, `:=`(SNV_MT_SNP_MT_N = sum(strsplit(mut_read_mut, split = ';')[[1]
 
 # Get some stats
 phased_muts[, `:=`(shared_depth   = sum( SNV_MT_SNP_MT_N, SNV_WT_SNP_MT_N, SNV_MT_SNP_WT_N, SNV_WT_SNP_WT_N ),
-                   mut_varcount = sum(SNV_MT_SNP_MT_N, SNV_MT_SNP_WT_N, na.rm=T), 
+                   mut_varcount   = sum(SNV_MT_SNP_MT_N, SNV_MT_SNP_WT_N, na.rm=T), 
                    snp_vaf_on_mut = SNV_MT_SNP_MT_N / sum(SNV_MT_SNP_MT_N, SNV_MT_SNP_WT_N, na.rm=T),
                    snp_vaf_on_wt  = SNV_WT_SNP_MT_N / sum(SNV_WT_SNP_MT_N, SNV_WT_SNP_WT_N, na.rm=T)),
              , 1:nrow(phased_muts) ]
-
-## save this while testing - takes 10 minutes to run the above
-fwrite(phased_muts, 'outputs/phasing/20230627/tmp_phased_muts.tsv', sep='\t')
-#phased_muts <- fread( 'outputs/phasing/20230627/tmp_phased_muts.tsv' )
 
 # overlay block and genotype for each snp from HAPCUT2
 phased[, id_hetsnp := paste(chr, pos, ref, sep = ':') ]
@@ -487,7 +483,7 @@ phased_muts <- as.data.table( inner_join( phased_muts,
                                           phased[, .(id_hetsnp, gt, block_id )] ) )
 
 # get counts from each haplotype per SNP
-phased_muts[, gt := gsub('\\/', '|', gt) ]
+# Interpret 0|1 as 0 ref and 1 alt (this is arbitiary)
 phased_muts[, Mut_hap1_varcount := ifelse(gt == '0|1', SNV_MT_SNP_MT_N, ifelse(gt == '1|0', SNV_MT_SNP_WT_N, NA)) ]
 phased_muts[, Mut_hap2_varcount := ifelse(gt == '0|1', SNV_MT_SNP_WT_N, ifelse(gt == '1|0', SNV_MT_SNP_MT_N, NA)) ]
 
@@ -496,21 +492,37 @@ phased_muts[, Mut_hap2_varcount := ifelse(gt == '0|1', SNV_MT_SNP_WT_N, ifelse(g
 phased_muts[, mut_block := block_id[ dist_mut_to_snp == min(dist_mut_to_snp) ][1], by = mutid ]
 #remove SNPs which aren't in the same block as the mutation
 phased_muts <- phased_muts[ block_id == mut_block ]
-# summarise per mutation
-muts_only_phased <- unique( phased_muts[mut_varcount > 0, 
-                                         .(chr = chr_mut, pos = pos_mut, ref = ref_mut, #alt = alt_mut,
-                                           block_id, hapvaf = sum(Mut_hap1_varcount)/(sum(Mut_hap1_varcount) + sum(Mut_hap2_varcount)), 
-                                           hapdepth = sum(Mut_hap1_varcount) + sum(Mut_hap2_varcount), 
-                                           hap1_id = paste(ifelse(gt == '0|1', 'A', 'R'), collapse = ':'), 
-                                           hap_id_SNP_pos = paste(pos_hetsnp, collapse = ':')), 
-                                        by = mutid ] )
+
+## summarise per mutation
+## The bases in hap1_id_base are those phased with the mutation if phase == 1, if phase == 0 then its the 
+## opposite (ref/vaf bases) that are phased with the mutation
+## only included SNPs in the ID if they actually contribute any allignment
+phased_muts[ (gt == '0|1' | gt == '1|0') & mut_varcount > 0, 
+              `:=`(hap1_vaf = sum(Mut_hap1_varcount)/(sum(Mut_hap1_varcount) + sum(Mut_hap2_varcount)), 
+                   hapdepth = sum(Mut_hap1_varcount) + sum(Mut_hap2_varcount), 
+                   hap1_id = paste(ifelse(gt == '0|1', 'A', 'R'), collapse = ':'), #A = alt, R = refernce
+                   hap1_bases = paste(ifelse(gt == '0|1', alt_hetsnp, ref_hetsnp), collapse = ':'), 
+                   hap2_bases = paste(ifelse(gt == '0|1', ref_hetsnp, alt_hetsnp), collapse = ':'), 
+                   N_mut_reads = paste(mut_varcount, collapse = ':'), 
+                   snp_hapbaf = paste(Mut_hap1_varcount/(Mut_hap1_varcount + Mut_hap2_varcount), collapse = ':'), 
+                   hap_id_SNP_pos = paste(pos_hetsnp, collapse = ':')), 
+              by = mutid ]
 
 # categorise phases
-muts_only_phased[, phase := ifelse( hapvaf > 0.75 & hapdepth > 2, 1, 
-                                 ifelse(hapvaf < 0.25 & hapdepth > 2, 0, NA) ) ]
+phased_muts[, phase := ifelse( hap1_vaf > 0.75 & hapdepth > 2, 'hap1', 
+                              ifelse(hap1_vaf < 0.25 & hapdepth > 2, 'hap2', NA) ) ]
+
+## save this while testing - takes 10 minutes to run the above
+fwrite(phased_muts, 'outputs/phasing/20230627/phased_muts_long.tsv', sep='\t')
+#phased_muts_long <- fread( 'outputs/phasing/20230627/phased_muts_long.tsv' )
+
+# summarise per mutation
+muts_only_phased <- unique( phased_muts[ mut_varcount > 0, 
+                                         .(chr = chr_mut, pos = pos_mut, ref = ref_mut, alt = alt_mut,
+                                           block_id, hap1_vaf, hapdepth, hap1_id, hap1_bases, hap2_bases,
+                                           hap_id_SNP_pos, N_mut_reads, phase ) ] )
 
 fwrite(muts_only_phased, 'outputs/phasing/20230627/phased_mutations.tsv', sep = '\t')
-
 
 # summarise blocks
 muts_only_phased[, `:=`(num_muts_block = sum(!is.na(phase)), 
@@ -518,8 +530,8 @@ muts_only_phased[, `:=`(num_muts_block = sum(!is.na(phase)),
                         sum_phase0_block = sum(phase == 0,na.rm=T)),
                  by = block_id ]
 
-muts_only_phased[ hapdepth>5, sum(hapvaf>0.9)/.N ]
-muts_only_phased[ hapdepth>5, sum(hapvaf<0.1)/.N ]
+
+muts_only_phased[ !chr == 'chrY', sum((hap1_vaf>=0.75 | hap1_vaf<=0.25))/.N ]
 
 muts_only_phased[ hapdepth==2, table(hapvaf) ]
 muts_only_phased[ hapdepth==3, table(hapvaf) ]

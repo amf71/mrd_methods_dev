@@ -13,7 +13,7 @@ SCRATCH_DIR='outputs/phasing/20230627/scratch/'
 echo "Mpileup collate for sample "${1}
 
 #Get all pileups together
-cat ${SCRATCH_DIR}/${1}.pileup.split*.txt > outputs/phasing/20230627/${1}.pileup.txt
+cat ${SCRATCH_DIR}/${T_SAMPLE}.pileup.split*.txt > outputs/phasing/20230627/${T_SAMPLE}.pileup.txt
 
 #Merge together mutation groups present in the same reads
 Rscript scripts/phasing/mpileup_same_reads_snvs.R ${1}
