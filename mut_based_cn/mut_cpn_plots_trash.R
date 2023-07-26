@@ -37,40 +37,6 @@ library(GenomicRanges)
 library(dplyr) 
 library(biomaRt)
 library(ggplot2)
-library(Rsamtools)
-library(metap)
-
-# my across genome plotting functions
-source('../repos/my_R_packages/amfFunctions/R/FrankellA.functions.R')
-
-
-# Functino to combine p values with fisher method from metap package (can't install..?)
-sumlog <- function(p, log.p = FALSE) {
-    
-    p <- p[ !is.na(p) ] ## added line
-    if(length(p)==1) return(list(p=p)) ## added line
-    if(length(p)==0) return(list(p=NA)) ## added line
-
-   keep <- (p > 0) & (p <= 1)
-   invalid <- sum(1L * keep) < 2
-   if(invalid) {
-      warning("Must have at least two valid p values")
-      res <- list(chisq = NA_real_, df = NA_integer_,
-         p = NA_real_, validp = p[keep])
-   } else {
-      lnp <- log(p[keep])
-      chisq <- (-2) * sum(lnp)
-      df <- 2 * length(lnp)
-      if(length(lnp) != length(p)) {
-         warning("Some studies omitted")
-      }
-      res <- list(chisq = chisq, df = df,
-         p = pchisq(chisq, df, lower.tail = FALSE,
-            log.p = log.p), validp = p[keep])
-    }
-   class(res) <- c("sumlog", "metap")
-   res
-}
 
 
 #############################################
@@ -96,51 +62,34 @@ if( !file.exists(outputs.folder) ) dir.create( outputs.folder )
 #### Get Inputs required for all analyses ####
 ##############################################
 
-# Phased muts short read vcf
-muts_phas_path  <- "inputs/phasing/Mutect2_filtered_LTX0064_SU_T1-R3_vs_LTX0064_BS_GL.vcf"
+# Phased mutations data processed R3
+fwrite(phased_muts, paste0(outputs.folder, date, '_phased_counts_by_mut_R3.tsv'), sep = '\t')
 
-# Short read Phasing
-phasing_path  <- "outputs/phasing/20230627/phased_mutations.tsv"
-phasing_long_path  <- "outputs/phasing/20230627/phased_muts_long.tsv"
+# Data processed by block baf/logR R3
+fwrite(mut_baf_logR, paste0(outputs.folder, date, '_baf_rdr_by_block_R3.tsv'), sep = '\t')
 
-# HAPCUT2 output
-phasing_vcf_path <- 'outputs/phasing/20230627/LTX0064_SU_N.snps_phased.frag.het.only.haplotype.phased.VCF'
+# Phased mutations extracted R6
+fwrite(test_data, paste0(outputs.folder, date, '_quasar_phased_counts_by_mut_R6.tsv'), sep = '\t')
+
+# Data processed by block baf/logR R6 quasar
+fwrite(quasar_test, paste0(outputs.folder, date, '_quasar_baf_rdr_by_block_R6.tsv'), sep = '\t')
+
 
 # CN from phased region
 cn_path  <- "/camp/lab/swantonc/working/opich/shared/afrankell/wgs/LTX0064_SU_T1-R3_subclones.txt"
 cn_test_path  <- "inputs/LTX0064_R6_Battenberg//LTX0064_SU_T1-R6_subclones.txt"
 
-#cn_path  <- "/Volumes/lab-swantonc/working/opich/shared/afrankell/wgs/LTX0064_SU_T1-R3_subclones.txt"
-
 # purity from pahsed region (from battenberg)
 purity_path <- "/camp/lab/swantonc/working/opich/shared/afrankell/wgs/LTX0064_SU_T1-R3_purity_ploidy.txt"
-purity_test_path <- "/camp/lab/swantonc/working/opich/shared/afrankell/wgs/LTX0064_SU_T1-R6_purity_ploidy.txt"
-
-#purity_path <- "/Volumes/lab-swantonc/working/opich/shared/afrankell/wgs/LTX0064_SU_T1-R3_purity_ploidy.txt"
 
 #het SNPs from phased tumour region to get allele identities to match phasing
 snps_path <- 'outputs/phasing/20230627/scratch/LTX0064_SU_N_filt_hetsnps_mpileup.vcf'
 bat_snps_dir <- '/camp/project/proj-tracerx-lung/tctProjects/frankella/ctDNA_methods_dev/inputs/LTX0064_R3_Battenberg/'
 bat_snps_pattern <- 'LTX0064_SU_T1-R3_alleleFrequencies*'
-#bat_snps_path <- '/Volumes/proj-tracerx-lung/tctProjects/frankella/ctDNA_methods_dev/inputs/LTX0064_R3_Battenberg/LTX0064_SU_T1-R3.BAFsegmented.txt'
-
-#mutations from lower purity region of same tumour to test
-muts_unphas_path <- '/camp/lab/swantonc/working/opich/shared/afrankell/wgs_temp/Mutect2_filtered_LTX0064_SU_T1-R6_vs_LTX0064_BS_GL.vcf.gz'
-#muts_unphas_path <- '/Volumes/lab-swantonc/working/opich/shared/afrankell/wgs_temp/Mutect2_filtered_LTX0064_SU_T1-R6_vs_LTX0064_BS_GL.vcf.gz'
-
-R6_bam_path <- 'inputs/LTX0064_R3_Battenberg/LTX0064_SU_T1-R6.recal.bam'
-R6_index_path <- 'inputs/LTX0064_R3_Battenberg/LTX0064_SU_T1-R6.recal.bam.bai'
 
 # Read in
-muts_vcf  <-  vcfR::read.vcfR( muts_phas_path )
 cn    <-  data.table::fread( cn_path )
 cn_test    <-  data.table::fread( cn_test_path )
-snps_vcf  <-  vcfR::read.vcfR( snps_path )
-muts_test_vcf <- vcfR::read.vcfR( muts_unphas_path )
-phas <- data.table::fread( phasing_path )
-haplotypes_vcf <- read.vcfR( phasing_vcf_path )
-purity_pliody <- data.table::fread( purity_path )
-purity_pliody_test <- data.table::fread( purity_test_path )
 phasing_long  <- fread( phasing_long_path )
 
 # collate tumour SNP read counts from battenberg
@@ -151,23 +100,7 @@ bat_snps <- rbindlist( lapply(files, fread ))
 ############################################################
 #### Make some QC plots on which mutations are phasable ####
 ############################################################
-phas[, hapdepth_plot := ifelse(hapdepth > 50, 50, hapdepth )]
-
-pdf( paste0( outputs.folder, date, '_hapdepth_vs_hapvaf.pdf') )
-ggplot(phas, aes(x = hapdepth_plot, y = hap1_vaf )) +
-    geom_density_2d_filled( bins = 20 ) +
-    geom_vline( xintercept = 2.5 ) +
-    geom_hline( yintercept = 0.25 ) +
-    geom_hline( yintercept = 0.75 ) +
-    scale_x_continuous( breaks = seq(0, 50, 5), labels = c(seq(0, 45, 5), '>50')) +
-    geom_text( x = 25, y = 0.5, size = 4, colour = 'white',
-               label = '73% of mutations >=3 hapdepth & >0.75 or <0.25 hapAF') +
-    theme_classic() +
-    labs( x = 'Number of hetSNP + Mut overlapping ONT reads',
-          y = 'Mean haplotype AF of hetSNP + Mutation reads') +
-    theme( text = element_text( size = 20),
-           legend.position = "none" )
-dev.off()
+phas[, hapdepth_plot := ifelse(hapdepth > 50, 50, hapdepth )] ## phas to phased_muts
 
 # Above doesn't include mutations with no reads overlapping a hetSNP
 plot_data <- phasing_long[(gt == '0|1' | gt == '1|0'), 
@@ -175,20 +108,6 @@ plot_data <- phasing_long[(gt == '0|1' | gt == '1|0'),
                               hapdepth = sum(mut_varcount), total_depth = sum(shared_depth)), 
                           by = mutid ]
 plot_data[, hapdepth_plot := ifelse(hapdepth > 50, 50, hapdepth )]
-
-pdf( paste0( outputs.folder, date, '_hapdepth_hist.pdf') )
-ggplot(plot_data, aes(x = hapdepth_plot)) +
-    geom_histogram( bins = 100 ) +
-    scale_x_continuous( breaks = seq(0, 50, 5), labels = c(seq(0, 45, 5), '>50') ) +
-    theme_classic() +
-    geom_vline( xintercept = 2.5 ) +
-    geom_text( x = 25, y = 5000, size = 4, 
-               label = '81% mutations > 0 hetSNP overlapping reads\n76% at least 3 overlapping reads (phasing threshold)') +
-    labs( x = 'Number of hetSNP + Mut overlapping ONT reads',
-          y = 'Freq') +
-    theme( text = element_text( size = 20),
-           legend.position = "none" )
-dev.off()
 
 plot_data[, mean_dist_plot := ifelse(mean_dist > 10000, 10000, mean_dist )]
 
@@ -230,116 +149,6 @@ ggplot(plot_data, aes(x = hapdepth == 0, y = total_depth )) +
            legend.position = "none" )
 dev.off()
 
-# why do we have ~20% of mutation with no reads overlapping a SNP?
-# Restrict to pretty clonal mutations - do this at line 288
-
-
-####################################
-#### bring needed info together ####
-####################################
-
-### annotate the battenberg SNPs baf ###
-snps <- data.table(  chr =  gsub( 'chr', '', getCHROM(snps_vcf)),
-                     pos =  getPOS(snps_vcf),
-                     ref =  getREF(snps_vcf),
-                     alt =  getALT(snps_vcf) )
-setnames(bat_snps,  c('chr', 'pos', 'countA', 'countC', 'countG', 'countT', 'depth'))
-bat_snps <- as.data.table( inner_join( bat_snps, snps ) )
-bat_snps <- bat_snps[ nchar(ref) == 1 & nchar(alt) == 1 ]
-bat_snps[, `:=`( var_count = get(paste0('count',alt)),  
-                 ref_count = get(paste0('count',ref)) ), 
-         1:nrow(bat_snps)]
-bat_snps[, baf := var_count/(var_count + ref_count)]
-
-# Extract full haplotype blocks
-hap_blocks <- data.table( chr =      gsub( 'chr', '', getCHROM(haplotypes_vcf)),
-                          pos =      getPOS(haplotypes_vcf),
-                          ref =      getREF(haplotypes_vcf),
-                          alt =      getALT(haplotypes_vcf),
-                          block_id = as.character(extract.gt(haplotypes_vcf, element='PS')),
-                          gt =       as.character(extract.gt(haplotypes_vcf, element='GT')) )
-
-#save this for the plotting script
-fst::write_fst(hap_blocks, paste0( outputs.folder, date, '_hapcut2_full_blocks.fst'))
-
-### Get average allele specific cn accross all the clones in this sample ###
-
-#remove unwanted columns 
-cn <- cn[, 1:13]
-
-# Melt by clone
-setnames(cn, gsub('_A', '', names(cn)))
-cn <- data.table::melt(cn, id.vars = c('chr', 'startpos', 'endpos'),
-           measure = patterns('^nMaj', '^nMin', '^frac'),
-           value.name = c("nMaj", "nMin", "frac"),
-           variable.name = 'clone_id')
-
-# remove NAs where fewer than max number of clones for a segment
-cn <- cn[ !is.na(nMaj) ]
-
-# average across clones 
-cn <- cn[, .(nMaj = sum(nMaj * frac),
-             nMin = sum(nMin * frac)),
-         by = .(chr, startpos, endpos) ]
-cn[, ntot := nMaj + nMin ]
-
-## merge phasing status with short read VAFs ##
-# Filter for PASS
-muts_vcf <- muts_vcf[ getFILTER(muts_vcf) == 'PASS' ]
-AD <- extract.gt(muts_vcf, element='AD')
-
-muts <- data.table(  chr =  getCHROM(muts_vcf),
-                     pos =  getPOS(muts_vcf),
-                     ref =  getREF(muts_vcf),
-                     alt =  getALT(muts_vcf),
-                     varcount_tumour  =  as.numeric( tstrsplit(AD[, 2], split = ',')[[2]] ),
-                     refcount_tumour  =  as.numeric( tstrsplit(AD[, 2], split = ',')[[1]] ), 
-                     varcount_norm  =  as.numeric( tstrsplit(AD[, 1], split = ',')[[2]] ),
-                     refcount_norm  =  as.numeric( tstrsplit(AD[, 1], split = ',')[[1]] ) )
-
-phased_muts <- as.data.table( inner_join( muts, phas ) )
-
-## merge in allele specific CN data ##
-# get phsaed mut granges obj
-phased_muts[, `:=`(start=pos, end=pos) ]
-phased_muts[, chr := gsub('chr', '', chr) ]
-ph_granges <- GenomicRanges::makeGRangesFromDataFrame(phased_muts)
-
-#get phsed cn object
-setnames(cn, c('startpos', 'endpos'), c('start', 'end'))
-cn_granges <- GenomicRanges::makeGRangesFromDataFrame(cn)
-
-# get indices for mutations in cn obj and then copy over information
-match <- GenomicRanges::findOverlaps(ph_granges, cn_granges, select = 'arbitrary')
-phased_muts[, maj_cn := cn[ match, nMaj ] ]
-phased_muts[, min_cn := cn[ match, nMin ] ]
-phased_muts[, tot_cn := cn[ match, ntot ] ]
-
-# copy over the segment borders of the mutation so we resist to this area when calculating
-# the hapbaf
-phased_muts[, seg_start := cn[ match, start ] ]
-phased_muts[, seg_end := cn[ match, end ] ]
-
-## Check if the mutations we can't phase are subclonal / low VAF
-phased_long_muts <- as.data.table( inner_join( muts, phasing_long[, `:=`(chr = chr_mut, pos = pos_mut, ref = ref_mut)] ) )
-
-plot_data <- phased_long_muts[(gt == '0|1' | gt == '1|0'), 
-                            .(n_hetsnps = .N, mean_dist = mean(dist_mut_to_snp), vaf = varcount_tumour/(varcount_tumour+refcount_tumour),
-                              hapdepth = sum(mut_varcount), total_depth = sum(shared_depth)), 
-                          by = mutid ]
-
-pdf( paste0( outputs.folder, date, '_shortread_vaf_vs_0hapdepth.pdf') )
-ggplot(plot_data, aes(x = hapdepth == 0, y = vaf )) +
-    geom_boxplot() +
-    theme_classic() +
-    labs( y = 'VAF in Illumina WGS') +
-    theme( text = element_text( size = 20),
-           legend.position = "none" )
-dev.off()
-
-plot_data <- unique(phased_long_muts[, .(mutid, vaf = varcount_tumour/(varcount_tumour+refcount_tumour), hap1_vaf, hapdepth)])
-plot_data[ vaf>0.20 & !is.na(hapdepth), table( (hap1_vaf < 0.25 | hap1_vaf > 0.75) &  hapdepth > 2)/.N ]
-
 #####################################################
 #### Match alleles and determine early mutations ####
 #####################################################
@@ -374,11 +183,6 @@ bat_snps[, N_haps := length(unique(paste(phase[!is.na(phase)], gt))), by = block
 bat_snps[, N_seg := length(unique(seg_name)), by = block ]
 #bat_snps[ N_seg==1, table(N_haps)]
 #bat_snps[ block == 70760312 ]
-
-#save this for the plotting script
-fst::write_fst(bat_snps, paste0( outputs.folder, date, '_bat_snps.fst'))
-
-
 
 plot_data <- bat_snps[ block == bat_snps[ AI > 0.75, unique(block)[2]] ]
 

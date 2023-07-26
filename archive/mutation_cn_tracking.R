@@ -259,9 +259,6 @@ hap_blocks <- data.table( chr =      gsub( 'chr', '', getCHROM(haplotypes_vcf)),
                           block_id = as.character(extract.gt(haplotypes_vcf, element='PS')),
                           gt =       as.character(extract.gt(haplotypes_vcf, element='GT')) )
 
-#save this for the plotting script
-fst::write_fst(hap_blocks, paste0( outputs.folder, date, '_hapcut2_full_blocks.fst'))
-
 ### Get average allele specific cn accross all the clones in this sample ###
 
 #remove unwanted columns 
@@ -374,11 +371,6 @@ bat_snps[, N_haps := length(unique(paste(phase[!is.na(phase)], gt))), by = block
 bat_snps[, N_seg := length(unique(seg_name)), by = block ]
 #bat_snps[ N_seg==1, table(N_haps)]
 #bat_snps[ block == 70760312 ]
-
-#save this for the plotting script
-fst::write_fst(bat_snps, paste0( outputs.folder, date, '_bat_snps.fst'))
-
-
 
 plot_data <- bat_snps[ block == bat_snps[ AI > 0.75, unique(block)[2]] ]
 
