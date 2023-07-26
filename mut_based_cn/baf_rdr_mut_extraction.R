@@ -242,68 +242,8 @@ split_block <- function( block, nmuts, mut_length_lim = 15, mut_target_length = 
 phased_muts[ !is.na(block_id), 
              bin_id := split_block(unique(bin_id), .N, mut_length_lim = 15, mut_target_length = 10 ), 
              by = block_id ]
-
-
-
-#phased_muts[ grepl( '_', bin_id), .(block_id, bin_id, pos)]
-#phased_muts[ !block_id_orig == block_id, .(block_id, block_id_orig, pos)][1:20]
-#phased_muts[ block_id_orig == 16675390, .(block_id, block_id_orig, pos)]
-
-
-## copy new blocks onto baf data ##
-#First work out where the edges of the blocks/new blocks are
-# edges of old blocks from snp data
-bat_snps[, pre_mut_pos := data.table::shift(pos, n = 1), by = chr ]
-bat_snps[, post_mut_pos := data.table::shift(pos, n = -1), by = chr ]
-bat_snps[, mid_before_pos := ifelse(!is.na(pre_mut_pos), round(pos - (pos - pre_mut_pos) / 2), pos) ]
-bat_snps[, mid_after_pos  := ifelse(!is.na(post_mut_pos), round(pos + (post_mut_pos - pos) / 2), pos)  ]
-bat_snps[, block_start := min(mid_before_pos), by = block ]
-bat_snps[, block_end := min(mid_before_pos), by = block ]
-bat_snps[, n_snps_block := , ]
-
-
-# edges of get edges of bins from mut data
-phased_muts[, pre_mut_pos := data.table::shift(pos, n = 1), by = chr ]
-phased_muts[, post_mut_pos := data.table::shift(pos, n = -1), by = chr ]
-phased_muts[, mid_before_pos := ifelse(!is.na(pre_mut_pos), round(pos - (pos - pre_mut_pos) / 2), pos) ]
-phased_muts[, mid_after_pos  := ifelse(!is.na(post_mut_pos), round(pos + (post_mut_pos - pos) / 2), pos)  ]
-phased_muts[, block_start := bat_snps[ match(block_id, block), block_start ]]
-phased_muts[, block_end := bat_snps[ match(block_id, block), block_end ]]
-
-block_sum <- unique( phased_muts[, .(mid_before_bin = min(mid_before_pos),
-                             mid_after_bin = max(mid_after_pos),
-                             block_start, block_end, block_id, 
-                             bin_start = block_start,
-                             bin_end = block_end,
-                             block_pos = mean(pos), chr ),
-                         by = bin_id] )
-
-block_sum[ !bin_id == block_id, 
-           `:=`( bin_start = ifelse(block_pos == min(block_pos), block_start, mid_before_bin ),
-                 bin_end   = ifelse(block_pos == max(block_pos), block_end,   mid_after_bin  ) ),
-           by = block_id ]
-
-# overlay new bins on mutations and snps
-phased_muts[, bin_start := block_sum[ match(phased_muts$bin_id, block_sum$bin_id), bin_start ]]
-phased_muts[, bin_end := block_sum[ match(phased_muts$bin_id, block_sum$bin_id), bin_end ]]
-
-bat_snps_granges <- copy(bat_snps)
-setnames(bat_snps_granges, 'pos', 'start')
-bat_snps_granges[, end := start ]
-bat_snps_granges <- GenomicRanges::makeGRangesFromDataFrame(bat_snps_granges)
-block_sum_granges <- copy(block_sum[, .(chr, start = bin_start, end = bin_end)])
-block_sum_granges <- GenomicRanges::makeGRangesFromDataFrame(block_sum_granges, na.rm=TRUE)
-match <- GenomicRanges::findOverlaps(bat_snps_granges, block_sum_granges, select = 'arbitrary')
-bat_snps[, bin_start := block_sum[ match, bin_start ] ]
-bat_snps[, bin_end   := block_sum[ match, bin_end ] ]
-bat_snps[, bin_id   := block_sum[ match, bin_id ] ]
-
-bat_snps[, table(is.na(bin_start))]
-
-match <- GenomicRanges::findOverlaps(bat_snps_granges, cn_granges, select = 'arbitrary')
-bat_snps[, AI := cn[ match, AI ] ]
-bat_snps[, seg_name := cn[ match, paste(chr, start, end, sep = ':') ] ]
-
+phased_muts[, bin_start := min(pos), by = bin_id ]
+phased_muts[, bin_end   := max(pos), by = bin_id ]
 
 
 ## Match the phase to the A/B/Maj/Min allele ##
@@ -381,7 +321,6 @@ calc_surrounding_gc <- function( chr, pos, window, ref = Hsapiens ){
 
 }
 
-
 phased_muts[, gc := calc_surrounding_gc(unique(chr), pos, window = 300 ), by = chr ]
 
 ## also replication timing correction
@@ -428,19 +367,28 @@ model = lm(varcount_tumour ~ splines::ns(x = gc, df = 5, intercept = T) +
 phased_muts[, varcount_tumour_corrected := residuals(model) + mean(varcount_tumour) ]
 phased_muts[ varcount_tumour_corrected < 0, varcount_tumour_corrected := 0]
 
+# same for refcount
+model = lm(refcount_tumour ~ splines::ns(x = gc, df = 5, intercept = T) + 
+                             splines::ns(x = get(best), df = 5, intercept = T) + 
+                             splines::ns(x = normal_depth, df = 5, intercept = T), y=F, model = F, data = phased_muts, na.action="na.exclude")
+phased_muts[, refcount_tumour_corrected := residuals(model) + mean(refcount_tumour) ]
+phased_muts[ refcount_tumour_corrected < 0, refcount_tumour_corrected := 0]
+
+
 ## Calcualate mutation based BAF and logR per block ##
 # summarise haplotype counts and number of mutations per block
-mut_baf_logR <- phased_muts[ (early_mut), 
+mut_baf_logR <- phased_muts[ (early_mut & phased_allele_cn > 0), 
                                 .( mean_hap1_varcount = mean(varcount_tumour[ phase == 'hap1' ],na.rm=T),
                                    mean_hap2_varcount = mean(varcount_tumour[ phase == 'hap2' ],na.rm=T),
-                                   mean_hap1_varnorm = mean((varcount_tumour/normal_depth)[ phase == 'hap1' ],na.rm=T),
-                                   mean_hap2_varnorm = mean((varcount_tumour/normal_depth)[ phase == 'hap2' ],na.rm=T),
                                    mean_hap1_varcount_cor = mean(varcount_tumour_corrected[ phase == 'hap1' ],na.rm=T),
                                    mean_hap2_varcount_cor = mean(varcount_tumour_corrected[ phase == 'hap2' ],na.rm=T),
+                                   mean_hap1_refcount = mean(refcount_tumour[ phase == 'hap1' ],na.rm=T),
+                                   mean_hap2_refcount = mean(refcount_tumour[ phase == 'hap2' ],na.rm=T),
+                                   mean_hap1_refcount_cor = mean(refcount_tumour_corrected[ phase == 'hap1' ],na.rm=T),
+                                   mean_hap2_refcount_cor = mean(refcount_tumour_corrected[ phase == 'hap2' ],na.rm=T),
                                    n_hap1_muts = sum(phase == 'hap1'), n_hap2_muts = sum(phase == 'hap2'),
-                                   block_start = min(pos),
-                                   block_end = max(pos) ),
-                             by = .(block_id, seg_start, seg_end, chr, maj_cn, min_cn, tot_cn) ]
+                                   block_start = min(pos), block_end = max(pos), bin_start, bin_end ),
+                             by = .(bin_id, block_id, seg_start, seg_end, chr, maj_cn, min_cn, tot_cn) ]
 
 # when you have LOH one allele will have no mutations. In this case set Varcount to 0. 
 mut_baf_logR[ min_cn == 0, 
@@ -449,22 +397,34 @@ mut_baf_logR[ min_cn == 0,
                      mean_hap1_varcount_cor = ifelse( is.na(mean_hap1_varcount_cor), 0, mean_hap1_varcount_cor),
                      mean_hap2_varcount_cor = ifelse( is.na(mean_hap2_varcount_cor), 0, mean_hap2_varcount_cor))]
 
+mut_baf_logR[, `:=`( hap1_vaf     = mean_hap1_varcount     / (mean_hap1_varcount + mean_hap1_refcount),
+                     hap1_vaf_cor = mean_hap1_varcount_cor / (mean_hap1_varcount_cor + mean_hap1_refcount_cor),
+                     hap2_vaf     = mean_hap2_varcount     / (mean_hap2_varcount + mean_hap2_refcount),
+                     hap2_vaf_cor = mean_hap2_varcount_cor / (mean_hap2_varcount_cor + mean_hap2_refcount_cor) )]
+
 # summarise baf/RDR across each block
 mut_baf_logR <- mut_baf_logR[ !is.na(mean_hap1_varcount) & !is.na(mean_hap2_varcount), 
-                                .( chr, block_start, block_end, seg_start, seg_end, block_id, maj_cn, min_cn, tot_cn, 
-                                   n_hap1_muts, n_hap2_muts, 
-                                   baf = mean_hap1_varcount / (mean_hap1_varcount + mean_hap2_varcount),
-                                   rdr = mean_hap1_varcount + mean_hap2_varcount,
-                                   baf_norm = mean_hap1_varnorm / (mean_hap1_varnorm + mean_hap2_varnorm),
-                                   rdr_norm = mean_hap1_varnorm + mean_hap2_varnorm,
-                                   baf_cor = mean_hap1_varcount_cor / (mean_hap1_varcount_cor + mean_hap2_varcount_cor),
-                                   rdr_cor = mean_hap1_varcount_cor + mean_hap2_varcount_cor ) ]
+                                `:=`( baf = mean_hap1_varcount / (mean_hap1_varcount + mean_hap2_varcount),
+                                      rdr = mean_hap1_varcount + mean_hap2_varcount,
+                                      baf_cor = mean_hap1_varcount_cor / (mean_hap1_varcount_cor + mean_hap2_varcount_cor),
+                                      rdr_cor = mean_hap1_varcount_cor + mean_hap2_varcount_cor,
+                                      baf_rc = hap1_vaf / (hap1_vaf + hap2_vaf),
+                                      rdr_rc = hap1_vaf + hap2_vaf,
+                                      baf_cor_rc = hap1_vaf_cor / (hap1_vaf_cor + hap2_vaf_cor),
+                                      rdr_cor_rc = hap1_vaf_cor + hap2_vaf_cor ) ]
 
 # caluclate different ways of looking at baf (eg hatchet)
 mut_baf_logR[, baf_inv := 1 - baf]
 mut_baf_logR[, baf_consistent := abs(baf - 0.5)]
-mut_baf_logR[, baf_norm_consistent := abs(baf_norm - 0.5)]
+mut_baf_logR[, baf_cor_inv := 1 - baf_cor ]
 mut_baf_logR[, baf_cor_consistent := abs(baf_cor - 0.5)]
+
+mut_baf_logR[, baf_rc_inv := 1 - baf_rc]
+mut_baf_logR[, baf_rc_consistent := abs(baf_rc - 0.5)]
+mut_baf_logR[, baf_cor_rc_inv := 1 - baf_cor_rc ]
+mut_baf_logR[, baf_cor_rc_consistent := abs(baf_cor_rc - 0.5)]
+
+
 
 # write out 
 fwrite(phased_muts, paste0(outputs.folder, date, '_phased_counts_by_mut_R3.tsv'), sep = '\t')
@@ -506,21 +466,20 @@ read_counts[, ref := extr_muts[ match, ref ] ]
 read_counts[, alt := extr_muts[ match, alt ] ]
 
 # warning where varcount 0 as no row
-read_counts <- unique(read_counts[, .(ref, alt, 
-                                refcount_tumour = count[nucleotide == ref],
-                                varcount_tumour = count[nucleotide == alt]), 
-                            by = .(chr = gsub('chr', '', seqnames), pos) ])
+read_counts <- unique( read_counts[, .(ref, alt, 
+                                       refcount_tumour = count[nucleotide == ref],
+                                       varcount_tumour = count[nucleotide == alt]), 
+                                   by = .(chr = gsub('chr', '', seqnames), pos)   ] )
 read_counts[ is.na(refcount_tumour), refcount_tumour := 0 ]
 read_counts[ is.na(varcount_tumour), varcount_tumour := 0 ]
 
-
 test_data <- as.data.table( inner_join(read_counts, 
                                        phased_muts[ (early_mut), 
-                                                    .(chr, pos, ref, alt, block_id, phase, 
+                                                    .(chr, pos, ref, alt, bin_id, block_id, phase, 
                                                       normal_depth, gc, get(best), 
                                                       ref_seg_start = seg_start, ref_seg_end = seg_end,
                                                       loh_ref_sample = min_cn == 0 ) ]) )
-setnames(test_data, 'V9', best)
+setnames(test_data, 'V10', best)
 
 model = lm(varcount_tumour ~ splines::ns(x = gc, df = 5, intercept = T) + 
                              splines::ns(x = get(best), df = 5, intercept = T) + 
@@ -536,8 +495,8 @@ quasar_test <- test_data[, .( ref_seg_start, ref_seg_end, chr, loh_ref_sample,
                              n_hap1_muts = sum(phase == 'hap1'), n_hap2_muts = sum(phase == 'hap2'),
                              n_hap1_muts_present = sum(phase == 'hap1' & varcount_tumour > 4), 
                              n_hap2_muts_present = sum(phase == 'hap2' & varcount_tumour > 4),
-                             block_start = min(pos), block_end = max(pos) ),
-                         by = block_id ]
+                             bin_start = min(pos), bin_end = max(pos), block_id ),
+                         by = bin_id ]
 
 # when you have LOH one allele will have no mutations. In this case set Varcount to 0. 
 quasar_test[ (loh_ref_sample), 
@@ -560,7 +519,7 @@ quasar_test[, `:=`(mean_hap1_varcount = ifelse( mean_hap1_varcount < 5, NA, mean
 
 quasar_test[, `:=`( loh_test = binom.test( c( sum(!is.na(mean_hap1_varcount)), sum(!is.na(mean_hap2_varcount)) ) )$p.value,
                     nmuts_present = sum(!is.na(mean_hap1_varcount)) + sum(!is.na(mean_hap2_varcount)) ), 
-            by = block_id ]
+            by = bin_id ]
 
 quasar_test[, sum_varcount := sum(mean_hap1_varcount, mean_hap2_varcount, na.rm=T), 1:nrow(quasar_test)]
 
@@ -576,8 +535,8 @@ quasar_test[ (seg_loh_p < 0.0001 & n_hap1_muts > 0 & n_hap2_muts > 0) | is_mirro
                      mean_hap2_varcount_cor = ifelse( is.na(mean_hap2_varcount_cor), 0, mean_hap2_varcount_cor))]
 
 quasar_test <- quasar_test[ !is.na(mean_hap1_varcount_cor) & !is.na(mean_hap1_varcount_cor), 
-                                .( chr, block_start, block_end, ref_seg_start, ref_seg_end, block_id, loh_ref_sample, 
-                                   seg_loh_p, is_mirror_vs_loh_ref, loh_test,
+                                .( chr, bin_start, bin_end, ref_seg_start, ref_seg_end, block_id, loh_ref_sample, 
+                                   seg_loh_p, is_mirror_vs_loh_ref, loh_test, bin_id,
                                    n_hap1_muts, n_hap2_muts, nmuts = n_hap1_muts + n_hap2_muts,
                                    mean_hap1_varcount, mean_hap2_varcount, 
                                    nmuts_present = n_hap1_muts + n_hap2_muts,

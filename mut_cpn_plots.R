@@ -68,10 +68,10 @@ if( !file.exists(outputs.folder) ) dir.create( outputs.folder )
 muts_phas_path  <- "inputs/phasing/Mutect2_filtered_LTX0064_SU_T1-R3_vs_LTX0064_BS_GL.vcf"
 
 # data from baf_rdr_mut_extraction.R processing script
-phased_muts_path <- 'outputs/mut_cn_processing/20230725/20230725_phased_counts_by_mut_R3.tsv'
-mut_baf_logR_path <- "outputs/mut_cn_processing/20230725/20230725_baf_rdr_by_block_R3.tsv"
-test_data_path <- 'outputs/mut_cn_processing/20230725/20230725_quasar_phased_counts_by_mut_R6.tsv'
-quasar_test_path <- 'outputs/mut_cn_processing/20230725/20230725_quasar_baf_rdr_by_block_R6.tsv'
+phased_muts_path <- 'outputs/mut_cn_processing/20230726/20230726_phased_counts_by_mut_R3.tsv'
+mut_baf_logR_path <- "outputs/mut_cn_processing/20230726/20230726_baf_rdr_by_block_R3.tsv"
+test_data_path <- 'outputs/mut_cn_processing/20230726/20230726_quasar_phased_counts_by_mut_R6.tsv'
+quasar_test_path <- 'outputs/mut_cn_processing/20230726/20230726_quasar_baf_rdr_by_block_R6.tsv'
 
 # CN from phased region
 cn_path  <- "inputs/LTX0064_R3_Battenberg/LTX0064_SU_T1-R3_subclones.txt"
@@ -231,7 +231,7 @@ bat_snps[, AI := cn[ match, AI ] ]
 bat_snps[, seg_name := cn[ match, paste(chr, start, end, sep = ':') ] ]
 
 # just look at high imbalence and SNPs that are very clearly on different alleles
-bat_snps[ AI > 0.75 , phase := ifelse(baf > 0.6, 'hap1', ifelse( baf < 0.4, 'hap2', NA ))]
+bat_snps[ AI > 0.6 , phase := ifelse(baf > 0.58, 'hap1', ifelse( baf < 0.4, 'hap2', NA ))]
 
 # Overlap hapcut phasing
 hap_blocks_granges <- copy(hap_blocks)
@@ -245,15 +245,22 @@ bat_snps[, block_length := hap_blocks[ match, block_length ] ]
 bat_snps[, gt := hap_blocks[ match, gt ] ]
 bat_snps[, N_seg := length(unique(seg_name)), by = block ]
 
+# Overlap bins from mut phasing
+phased_muts_granges <- GenomicRanges::makeGRangesFromDataFrame(phased_muts[, .(chr, start = bin_start, end = bin_end)])
+match <- GenomicRanges::findOverlaps(bat_snps_granges, phased_muts_granges, select = 'arbitrary')
+bat_snps[, bin_id := phased_muts[ match, bin_id ] ]
+
+
 # Overlay onto phasing whether there is consistency with BAF seperation based 
 # phasing in each block
 
 good_phas_fun <- function( phase, gt, n_snps_limit = 5 ){
     
+    if(all(is.na(phase))) return( NA )
     if(n_snps_limit > min(table(phase)) - 1) n_snps_limit <- min(table(phase)) - 1
 
     phas1_correct <- table( phase[ gt == '1|0' ] )
-    phas1_correct <- phas1_correct[ phas1_correct > n_snps_limit &  ]
+    phas1_correct <- phas1_correct[ phas1_correct > n_snps_limit ]
     phas1_correct <- length(phas1_correct) < 2
     phas2_correct <- table( phase[ gt == '0|1' ] )
     phas2_correct <- phas2_correct[ phas2_correct > n_snps_limit ]
@@ -263,16 +270,16 @@ good_phas_fun <- function( phase, gt, n_snps_limit = 5 ){
 
 }
 
-bat_snps[ !is.na(block), quality_block := good_phas_fun(phase, gt, n_snps_limit = 1), by = block  ]
-phased_muts[, quality_block := bat_snps[ match( block_id, block ), quality_block ]]
-mut_baf_logR[, quality_block := phased_muts[ match(mut_baf_logR$block_id, phased_muts$block_id), quality_block ]]
+bat_snps[ !is.na(bin_id), quality_bin := good_phas_fun(phase, gt, n_snps_limit = 0), by = bin_id  ]
+phased_muts[, quality_bin := bat_snps[ match(phased_muts$bin_id, bat_snps$bin_id), quality_bin ]]
+mut_baf_logR[, quality_bin := phased_muts[ match(mut_baf_logR$bin_id, phased_muts$bin_id), quality_bin ]]
 
 
-phased_muts[ , poss_misphased := phased_allele_cn - mut_cpn < -0.5 ]
-phased_muts[, table(poss_misphased, quality_block)]
-sum <- phased_muts[!phase=='', .(nmut = .N, block_length=max(pos)-min(pos)), by = block_id]
-sum[, gn_frac := block_length/3000000000]
-sum[, sum(gn_frac)*100, by = nmut>6 ][ order(nmut)]
+phased_muts[, poss_misphased := phased_allele_cn - mut_cpn < -0.5 ]
+phased_muts[, table(poss_misphased, quality_bin)]
+sum <- phased_muts[ !phase=='', .(nmut = .N, block_length = max(pos) - min(pos)), by = block_id ]
+sum[, gn_frac := block_length / 3000000000 ]
+sum[, sum(gn_frac) * 100, by = nmut > 6 ][ order(nmut) ]
 # need to get these numbers up with longer phasing (+ also more accurate!)
 
 
@@ -295,8 +302,6 @@ chrlength.human_before_cum <- sapply(1:length(chrlength.human), function(i){
 names(chrlength.human_before_cum) <- names(chrlength.human)
 
 setnames(mut_baf_logR, c('seg_start', 'seg_end'), c('start', 'end'))
-home <- '/camp/project/'
-mut_baf_logR <- as.data.table(add.cummulative.start.end(as.data.frame(mut_baf_logR)))
 mut_baf_logR[, `:=`(Start.cummulitive = start + chrlength.human_before_cum[ names(chrlength.human_before_cum) == chr ], 
                     End.cummulitive = end + chrlength.human_before_cum[ names(chrlength.human_before_cum) == chr ]),
                1:nrow(mut_baf_logR) ]
@@ -345,7 +350,7 @@ dev.off()
 # Now plot the RDR and BAF across the genome
 
 mut_baf_logR[, block_centre := (block_end - block_start)/2 + block_start ]
-mut_baf_logR[, block_centre_cum := block_centre + chrlength.human_before_cum[ names(chrlength.human_before_cum) == chr ], 
+mut_baf_logR[, bin_centre_cum := block_centre + chrlength.human_before_cum[ names(chrlength.human_before_cum) == chr ], 
                1:nrow(mut_baf_logR) ]
 
 # rdr & baf across genome
@@ -355,7 +360,7 @@ plot_data <- mut_baf_logR[ , .(mean_rdr = mean(plot_rdr, na.rm=T)), by = .(Start
 pdf(paste0(outputs.folder, date, '_rdr_accross_genome.pdf'), width = 15, height = 5)
     ggplot() +
     geom_point(data = mut_baf_logR, shape = 21,
-                aes(x = block_centre_cum, y = plot_rdr, fill = baf_consistent)) +
+                aes(x = bin_centre_cum, y = plot_rdr, fill = baf_consistent)) +
     geom_rect(data = plot_data, aes(xmin = Start.cummulitive, 
                                     xmax = End.cummulitive , 
                                     ymin = mean_rdr, 
@@ -425,7 +430,7 @@ dev.off()
 
 #look at hist of all LogR  -qual
 pdf(paste0(outputs.folder, date, '_BAF_hist_qual.pdf'), width = 9)
-    ggplot(mut_baf_logR[ (quality_block) ]) +
+    ggplot(mut_baf_logR[ (quality_bin) ]) +
     geom_histogram(aes(x = baf_consistent, fill = chr ) ) +
     labs( x = '0.5-BAF' ) +
     theme_bw() +
@@ -434,7 +439,7 @@ dev.off()
 
 #look at hist of all BAF  -qual
 pdf(paste0(outputs.folder, date, '_rdr_hist_qual.pdf'), width = 9)
-    ggplot(mut_baf_logR[ (quality_block) ]) +
+    ggplot(mut_baf_logR[ (quality_bin) ]) +
     geom_histogram(aes(x = log2(rdr), fill = chr ) ) +
     labs( x = 'log2 sum allele readcounts' ) +
     theme_bw() +
@@ -443,7 +448,7 @@ dev.off()
 
 ## make a hatchet style plot
 pdf(paste0(outputs.folder, date, '_hatchet_quality2.pdf'), width = 9)
-    ggplot(mut_baf_logR[ (quality_block) & n_hap1_muts > 5 & n_hap2_muts > 5 ]) +
+    ggplot(mut_baf_logR[ (quality_bin) & n_hap1_muts > 5 & n_hap2_muts > 5 ]) +
     geom_point(aes(x = baf_consistent, y = log2(rdr), colour = chr ), alpha = 0.5 ) +
     labs( x = '0.5-BAF', 
           y = 'log2 sum allele readcounts' ) +
@@ -453,21 +458,21 @@ dev.off()
 
 # compare baf and AI in quality bins
 pdf(paste0(outputs.folder, date, '_rdr_vs_totcn_quality.pdf'), width = 9)
-    mut_baf_logR[ (quality_block), plot(log2(rdr), tot_cn) ]
+    mut_baf_logR[ (quality_bin), plot(log2(rdr), tot_cn) ]
 dev.off()
 
 # compare baf and AI in quality bins
 pdf(paste0(outputs.folder, date, '_baf_vs_AI_quality.pdf'), width = 9)
-    mut_baf_logR[ (quality_block) & n_hap1_muts > 1 & n_hap2_muts > 1, plot(AI, baf_consistent) ]
+    mut_baf_logR[ (quality_bin) & n_hap1_muts > 1 & n_hap2_muts > 1, plot(AI, baf_consistent) ]
 dev.off()
 
 # drdr across genome for quality bins
-plot_data <- mut_baf_logR[ (quality_block) , .(mean_rdr = mean(rdr, na.rm=T)), by = .(Start.cummulitive, End.cummulitive)]
+plot_data <- mut_baf_logR[ (quality_bin) , .(mean_rdr = mean(rdr, na.rm=T)), by = .(Start.cummulitive, End.cummulitive)]
 
 pdf(paste0(outputs.folder, date, '_rdr_accross_genome_quality.pdf'), width = 15, height = 5)
     ggplot() +
-    geom_point(data = mut_baf_logR[(quality_block)], shape = 21,
-                aes(x = block_centre_cum, y = rdr, fill = baf_consistent)) +
+    geom_point(data = mut_baf_logR[(quality_bin)], shape = 21,
+                aes(x = bin_centre_cum, y = rdr, fill = baf_consistent)) +
     geom_rect(data = plot_data, aes(xmin = Start.cummulitive, 
                                     xmax = End.cummulitive , 
                                     ymin = mean_rdr, 
@@ -486,12 +491,12 @@ dev.off()
 mut_baf_logR[, nmuts := n_hap1_muts + n_hap2_muts]
 mut_baf_logR[, nmuts_perAl := ifelse( min_cn == 0, nmuts, nmuts/2 )]
 
-plot_data <- mut_baf_logR[ (quality_block) & nmuts_perAl > 2 , .(mean_rdr = mean(rdr, na.rm=T)), by = .(Start.cummulitive, End.cummulitive)]
+plot_data <- mut_baf_logR[ (quality_bin) & nmuts_perAl > 2 , .(mean_rdr = mean(rdr, na.rm=T)), by = .(Start.cummulitive, End.cummulitive)]
 
 pdf(paste0(outputs.folder, date, '_rdr_accross_genome_quality_3muts_per_al.pdf'), width = 15, height = 5)
     ggplot() +
-    geom_point(data = mut_baf_logR[(quality_block)  & nmuts_perAl > 2], shape = 21,
-                aes(x = block_centre_cum, y = rdr, fill = baf_consistent)) +
+    geom_point(data = mut_baf_logR[(quality_bin)  & nmuts_perAl > 2], shape = 21,
+                aes(x = bin_centre_cum, y = rdr, fill = baf_consistent)) +
     geom_rect(data = plot_data, aes(xmin = Start.cummulitive, 
                                     xmax = End.cummulitive , 
                                     ymin = mean_rdr, 
@@ -523,9 +528,9 @@ seg_sum <- mut_baf_logR[ n_hap1_muts > 1 & n_hap2_muts > 1,
                           is_all_loh = all(min_cn == 0),
                           is_any_loh = any(min_cn == 0),
                           nmuts_perAl = sum(nmuts_perAl)), 
-                        by = .(start, end,  quality_block)]
+                        by = .(start, end,  quality_bin)]
 
-pdf( paste0(outputs.folder, date, '_rdr_sd_by_quality_block.pdf') )
+pdf( paste0(outputs.folder, date, '_rdr_sd_by_quality_bin.pdf') )
 ggplot(seg_sum, aes(x = nmuts_perAl, y = norm_sd_baf)) +
     geom_point() 
 dev.off()
@@ -579,7 +584,7 @@ plot_data <- mut_baf_logR[ , .(mean_rdr = mean(plot_rdr, na.rm=T)), by = .(Start
 pdf(paste0(outputs.folder, date, '_rdr_cor_accross_genome.pdf'), width = 15, height = 5)
     ggplot() +
     geom_point(data = mut_baf_logR, shape = 21,
-                aes(x = block_centre_cum, y = plot_rdr, fill = baf_consistent)) +
+                aes(x = bin_centre_cum, y = plot_rdr, fill = baf_consistent)) +
     geom_rect(data = plot_data, aes(xmin = Start.cummulitive, 
                                     xmax = End.cummulitive , 
                                     ymin = mean_rdr, 
@@ -641,7 +646,7 @@ dev.off()
 
 #look at hist of all LogR  -qual
 pdf(paste0(outputs.folder, date, '_BAF_cor_hist_qual.pdf'), width = 9)
-    ggplot(mut_baf_logR[ (quality_block) ]) +
+    ggplot(mut_baf_logR[ (quality_bin) ]) +
     geom_histogram(aes(x = baf_cor_consistent, fill = chr ) ) +
     labs( x = '0.5-BAF' ) +
     theme_bw() +
@@ -650,7 +655,7 @@ dev.off()
 
 #look at hist of all BAF  -qual
 pdf(paste0(outputs.folder, date, '_rdr_cor_hist_qual.pdf'), width = 9)
-    ggplot(mut_baf_logR[ (quality_block) ]) +
+    ggplot(mut_baf_logR[ (quality_bin) ]) +
     geom_histogram(aes(x = log2(rdr_cor), fill = chr ) ) +
     labs( x = 'log2 sum allele readcounts' ) +
     theme_bw() +
@@ -659,17 +664,19 @@ dev.off()
 
 ## make a hatchet style plot
 pdf(paste0(outputs.folder, date, '_hatchet_cor_quality.pdf'), width = 9)
-    ggplot(mut_baf_logR[ (quality_block) ]) +
-    geom_point(aes(x = baf_cor_consistent, y = log2(rdr_cor), colour = chr ), alpha = 0.5 ) +
+    ggplot(mut_baf_logR[ (quality_bin | (maj_cn / tot_cn) < 0.6) ]) +
+    geom_point(aes(x = baf_cor_consistent, y = rdr_cor, colour = as.factor(chr) ) ) +
     labs( x = '0.5-BAF', 
-          y = 'log2 sum allele readcounts' ) +
+          y = 'sum allele readcounts',
+          colour = '' ) +
+    scale_y_continuous(limits = c(0,1000)) +
     theme_bw() +
     theme( text = element_text( size = 20 ))
 dev.off()
 
 ## make a hatchet style plot + density
 pdf(paste0(outputs.folder, date, '_hatchet_cor_quality_density.pdf'), width = 9)
-    ggplot(mut_baf_logR[ (quality_block) ], aes(x = baf_consistent, y = log2(rdr))) +
+    ggplot(mut_baf_logR[ (quality_bin) ], aes(x = baf_consistent, y = log2(rdr))) +
     geom_point(aes( colour = chr ), alpha = 0.5 ) +
     stat_density_2d( alpha = 0.25,geom = "raster", contour = FALSE ) +
     labs( x = '0.5-BAF', 
@@ -680,7 +687,7 @@ dev.off()
 
 ## make a hatchet style plot
 pdf(paste0(outputs.folder, date, '_hatchet_cor_quality_3muts_perAl.pdf'), width = 9)
-    ggplot(mut_baf_logR[ (quality_block) & nmuts_perAl > 3 ]) +
+    ggplot(mut_baf_logR[ (quality_bin) & nmuts_perAl > 3 ]) +
     geom_point(aes(x = baf_consistent, y = log2(rdr), colour = chr ), alpha = 0.5 ) +
     labs( x = '0.5-BAF', 
           y = 'log2 sum allele readcounts' ) +
@@ -690,21 +697,21 @@ dev.off()
 
 # compare baf and AI in quality bins
 pdf(paste0(outputs.folder, date, '_rdr_cor_vs_totcn_quality.pdf'), width = 9)
-    mut_baf_logR[ (quality_block), plot(log2(rdr_cor), tot_cn) ]
+    mut_baf_logR[ (quality_bin), plot(log2(rdr_cor), tot_cn) ]
 dev.off()
 
 # compare baf and AI in quality bins
 pdf(paste0(outputs.folder, date, '_baf_cor_vs_AI_quality.pdf'), width = 9)
-    mut_baf_logR[ (quality_block), plot(AI, baf_cor_consistent) ]
+    mut_baf_logR[ (quality_bin), plot(AI, baf_cor_consistent) ]
 dev.off()
 
 # drdr across genome for quality bins
-plot_data <- mut_baf_logR[ (quality_block) , .(mean_rdr = mean(rdr_cor, na.rm=T)), by = .(Start.cummulitive, End.cummulitive)]
+plot_data <- mut_baf_logR[ (quality_bin | (maj_cn / tot_cn) < 0.6 ) , .(mean_rdr = mean(rdr_cor, na.rm=T)), by = .(Start.cummulitive, End.cummulitive)]
 
-pdf(paste0(outputs.folder, date, '_rdr_cor_accross_genome_quality.pdf'), width = 15, height = 5)
+pdf(paste0(outputs.folder, date, '_rdr_cor_accross_genome_quality_.pdf'), width = 15, height = 5)
     ggplot() +
-    geom_point(data = mut_baf_logR[(quality_block)], shape = 21,
-                aes(x = block_centre_cum, y = rdr_cor, fill = baf_cor_consistent)) +
+    geom_point(data = mut_baf_logR[(quality_bin | (maj_cn / tot_cn) < 0.6 )], shape = 21,
+                aes(x = bin_centre_cum, y = rdr_cor, fill = baf_cor_consistent)) +
     geom_rect(data = plot_data, aes(xmin = Start.cummulitive, 
                                     xmax = End.cummulitive , 
                                     ymin = mean_rdr, 
@@ -712,6 +719,7 @@ pdf(paste0(outputs.folder, date, '_rdr_cor_accross_genome_quality.pdf'), width =
               colour = 'red', size = 0.5) +
     scale_fill_distiller( palette = 'YlGnBu', direction = 1 ) +
     scale_x_continuous(label = plot_cum$chr, breaks = plot_cum$center) +
+    scale_y_continuous(limits = c(0,1000)) +
     labs( x = 'Chromosome', 
           y = 'Sum mean SNV varcount across alleles',
           fill = 'hapBAF' ) +
@@ -719,14 +727,55 @@ pdf(paste0(outputs.folder, date, '_rdr_cor_accross_genome_quality.pdf'), width =
     theme( text = element_text( size = 16 ))
 dev.off()
 
+
+# drdr across genome for quality bins using refn control
+plot_data <- mut_baf_logR[ (quality_bin | (maj_cn / tot_cn) < 0.6 ) , .(mean_rdr = mean(rdr_cor_rc, na.rm=T)), by = .(Start.cummulitive, End.cummulitive)]
+
+pdf(paste0(outputs.folder, date, '_rdr_cor_accross_genome_refcontrol.pdf'), width = 15, height = 5)
+    ggplot() +
+    geom_point(data = mut_baf_logR, shape = 21,
+                aes(x = bin_centre_cum, y = rdr_cor_rc)) +
+    geom_rect(data = plot_data, aes(xmin = Start.cummulitive, 
+                                    xmax = End.cummulitive , 
+                                    ymin = mean_rdr, 
+                                    ymax = mean_rdr), 
+              colour = 'red', size = 0.5) +
+    scale_fill_distiller( palette = 'YlGnBu', direction = 1 ) +
+    scale_x_continuous(label = plot_cum$chr, breaks = plot_cum$center) +
+    #scale_y_continuous(limits = c(0,1000)) +
+    labs( x = 'Chromosome', 
+          y = 'Sum mean SNV varcount across alleles',
+          fill = 'hapBAF' ) +
+    theme_bw() +
+    theme( text = element_text( size = 16 ))
+dev.off()
+
+unique( mut_baf_logR[ chr == '3' & bin_start > 150000000 & rdr_cor < 600 ] )
+
+## make a plot of BAFs in each bin to check cn segmenation phasing
+bat_snps[, pos_cum := pos + chrlength.human_before_cum[ names(chrlength.human_before_cum) == chr ], 
+             1:nrow(bat_snps)]
+
+pdf(paste0(outputs.folder, date, '_raw_varcounts_SNPs_phased_chr3.pdf'), width = 15, height = 5)
+    ggplot(bat_snps[ !is.na(phase) & chr == '3' & pos > 150000000 ]) +
+    geom_point(aes(x = pos_cum, y = var_count, colour = phase ), alpha = 0.5 ) +
+    scale_x_continuous(label = plot_cum$chr, breaks = plot_cum$center) +
+    scale_y_continuous(limits=c(0, 1200)) +
+    labs( x = 'Chromosome', 
+          y = 'SNP Varcount' ) +
+    theme_bw() +
+    theme( text = element_text( size = 20 ))
+dev.off()
+
+
 # drdr across genome for quality bins & limited baf
-plot_data <- mut_baf_logR[ (quality_block) , .(mean_rdr = mean(rdr_cor, na.rm=T)), by = .(Start.cummulitive, End.cummulitive)]
+plot_data <- mut_baf_logR[ (quality_bin) , .(mean_rdr = mean(rdr_cor, na.rm=T)), by = .(Start.cummulitive, End.cummulitive)]
 mut_baf_logR[, baf_cor_consistent_lim := ifelse( baf_cor_consistent > 0.2, 0.2, baf_cor_consistent) ]
 
 pdf(paste0(outputs.folder, date, '_rdr_cor_accross_genome_quality_baf_lim0.2.pdf'), width = 15, height = 5)
     ggplot() +
-    geom_point(data = mut_baf_logR[(quality_block)], shape = 21,
-                aes(x = block_centre_cum, y = rdr_cor, fill = baf_cor_consistent_lim)) +
+    geom_point(data = mut_baf_logR[(quality_bin)], shape = 21,
+                aes(x = bin_centre_cum, y = rdr_cor, fill = baf_cor_consistent_lim)) +
     geom_rect(data = plot_data, aes(xmin = Start.cummulitive, 
                                     xmax = End.cummulitive , 
                                     ymin = mean_rdr, 
@@ -745,12 +794,12 @@ dev.off()
 mut_baf_logR[, nmuts := n_hap1_muts + n_hap2_muts]
 mut_baf_logR[, nmuts_perAl := ifelse( min_cn == 0, nmuts, nmuts/2 )]
 
-plot_data <- mut_baf_logR[ (quality_block) & nmuts_perAl > 2 , .(mean_rdr = mean(rdr_cor, na.rm=T)), by = .(Start.cummulitive, End.cummulitive)]
+plot_data <- mut_baf_logR[ (quality_bin) & nmuts_perAl > 2 , .(mean_rdr = mean(rdr_cor, na.rm=T)), by = .(Start.cummulitive, End.cummulitive)]
 
 pdf(paste0(outputs.folder, date, '_rdr_cor_accross_genome_quality_3muts_per_al.pdf'), width = 15, height = 5)
     ggplot() +
-    geom_point(data = mut_baf_logR[(quality_block)  & nmuts_perAl > 2], shape = 21,
-                aes(x = block_centre_cum, y = rdr_cor, fill = baf_consistent)) +
+    geom_point(data = mut_baf_logR[(quality_bin)  & nmuts_perAl > 2], shape = 21,
+                aes(x = bin_centre_cum, y = rdr_cor, fill = baf_consistent)) +
     geom_rect(data = plot_data, aes(xmin = Start.cummulitive, 
                                     xmax = End.cummulitive , 
                                     ymin = mean_rdr, 
@@ -770,21 +819,17 @@ dev.off()
 #### Plot for test lower purity region ####
 ###########################################
 
-test_data[, quality_block := bat_snps[ match( block_id, block ), quality_block ]]
-quasar_test[, quality_block := bat_snps[ match( block_id, block ), quality_block ]]
+test_data[, quality_bin := bat_snps[ match( test_data$bin_id, bat_snps$bin_id ), quality_bin ]]
+quasar_test[, quality_bin := bat_snps[ match( quasar_test$bin_id, bat_snps$bin_id ), quality_bin ]]
 
 
-quasar_test[, block_centre := (block_end - block_start)/2 + block_start ]
-quasar_test[, block_centre_cum := block_centre + chrlength.human_before_cum[ names(chrlength.human_before_cum) == chr ], 
+quasar_test[, bin_centre := (bin_end - bin_start)/2 + bin_start ]
+quasar_test[, bin_centre_cum := bin_centre + chrlength.human_before_cum[ names(chrlength.human_before_cum) == chr ], 
                1:nrow(quasar_test) ]
 setnames(quasar_test, c('ref_seg_start', 'ref_seg_end'), c('start', 'end'))
 quasar_test[, `:=`(Start.cummulitive = start + chrlength.human_before_cum[ names(chrlength.human_before_cum) == chr ], 
                     End.cummulitive = end + chrlength.human_before_cum[ names(chrlength.human_before_cum) == chr ]),
                1:nrow(quasar_test) ]
-
-## why still getting random 0 blocks eg on chr3
-quasar_test[ (quality_block) & chr == 1 & rdr_cor < 5]
-
 
 # rdr & baf across genome -cor
 plot_data <- quasar_test[ , .(mean_rdr = mean(rdr_cor, na.rm=T)), by = .(Start.cummulitive, End.cummulitive)]
@@ -792,7 +837,7 @@ plot_data <- quasar_test[ , .(mean_rdr = mean(rdr_cor, na.rm=T)), by = .(Start.c
 pdf(paste0(outputs.folder, date, '_rdr_cor_accross_genome_test.pdf'), width = 15, height = 5)
     ggplot() +
     geom_point(data = quasar_test, shape = 21,
-                aes(x = block_centre_cum, y = rdr_cor, fill = baf_cor_consistent)) +
+                aes(x = bin_centre_cum, y = rdr_cor, fill = baf_cor_consistent)) +
     geom_rect(data = plot_data, aes(xmin = Start.cummulitive, 
                                     xmax = End.cummulitive , 
                                     ymin = mean_rdr, 
@@ -808,12 +853,12 @@ pdf(paste0(outputs.folder, date, '_rdr_cor_accross_genome_test.pdf'), width = 15
 dev.off()
 
 # rdr & baf across genome - quality cor
-plot_data <- quasar_test[ (quality_block & (!is.na(baf_cor_consistent) | is_mirror_vs_loh_ref)), .(mean_rdr = mean(rdr_cor, na.rm=T)), by = .(Start.cummulitive, End.cummulitive)]
+plot_data <- quasar_test[ (quality_bin & (!is.na(baf_cor_consistent) | is_mirror_vs_loh_ref)), .(mean_rdr = mean(rdr_cor, na.rm=T)), by = .(Start.cummulitive, End.cummulitive)]
 
 pdf(paste0(outputs.folder, date, '_rdr_cor_accross_genome_quality_test.pdf'), width = 15, height = 5)
     ggplot() +
-    geom_point(data = quasar_test[ (quality_block & (!is.na(baf_cor_consistent) | is_mirror_vs_loh_ref)) ], shape = 21,
-                aes(x = block_centre_cum, y = rdr_cor, fill = baf_cor_consistent)) +
+    geom_point(data = quasar_test[ (quality_bin & (!is.na(baf_cor_consistent) | is_mirror_vs_loh_ref)) ], shape = 21,
+                aes(x = bin_centre_cum, y = rdr_cor, fill = baf_cor_consistent)) +
     geom_rect(data = plot_data, aes(xmin = Start.cummulitive, 
                                     xmax = End.cummulitive , 
                                     ymin = mean_rdr, 
@@ -830,8 +875,8 @@ dev.off()
 
 pdf(paste0(outputs.folder, date, '_rdr_cor_accross_genome_quality_longblocks_test.pdf'), width = 15, height = 5)
     ggplot() +
-    geom_point(data = quasar_test[ (quality_block) & n_hap1_muts > 1 & n_hap2_muts > 1 ], shape = 21,
-                aes(x = block_centre_cum, y = rdr_cor, fill = baf_cor_consistent)) +
+    geom_point(data = quasar_test[ (quality_bin) & n_hap1_muts > 1 & n_hap2_muts > 1 ], shape = 21,
+                aes(x = bin_centre_cum, y = rdr_cor, fill = baf_cor_consistent)) +
     geom_rect(data = plot_data, aes(xmin = Start.cummulitive, 
                                     xmax = End.cummulitive , 
                                     ymin = mean_rdr, 
@@ -852,8 +897,8 @@ plot_data <- quasar_test[ , .(mean_rdr = mean(rdr, na.rm=T)), by = .(Start.cummu
 
 pdf(paste0(outputs.folder, date, '_rdr_accross_genome_quality_test.pdf'), width = 15, height = 5)
     ggplot() +
-    geom_point(data = quasar_test[ (quality_block) ], shape = 21,
-                aes(x = block_centre_cum, y = rdr, fill = baf_consistent)) +
+    geom_point(data = quasar_test[ (quality_bin) ], shape = 21,
+                aes(x = bin_centre_cum, y = rdr, fill = baf_consistent)) +
     geom_rect(data = plot_data, aes(xmin = Start.cummulitive, 
                                     xmax = End.cummulitive , 
                                     ymin = mean_rdr, 
@@ -961,7 +1006,7 @@ dev.off()
 
 ## make a hatchet style plot 
 pdf(paste0(outputs.folder, date, '_hatchet_cor_quality_test.pdf'), width = 9)
-    ggplot(mut_baf_logR[ (quality_block) ]) +
+    ggplot(mut_baf_logR[ (quality_bin) ]) +
     geom_point(aes(x = baf_cor_consistent, y = log2(rdr_cor), colour = chr ), alpha = 0.5 ) +
     labs( x = '0.5-BAF', 
           y = 'log2 sum allele readcounts' ) +
@@ -971,13 +1016,13 @@ dev.off()
 
 
 ### look at hap varcount per block
-plot_data <- melt(quasar_test[ (quality_block), .(block_id, block_centre_cum, hap1=mean_hap1_varcount, hap2=mean_hap2_varcount)], 
-                    id.vars = c('block_id', 'block_centre_cum'), measure = patterns( '^hap') )
+plot_data <- melt(quasar_test[ (quality_bin), .(block_id, bin_centre_cum, hap1=mean_hap1_varcount, hap2=mean_hap2_varcount)], 
+                    id.vars = c('block_id', 'bin_centre_cum'), measure = patterns( '^hap') )
 
 pdf(paste0(outputs.folder, date, '_hapcounts_per_block_test_quality.pdf'), width = 15, height = 5)
     ggplot() +
     geom_point(data = plot_data, shape = 21,
-                aes(x = block_centre_cum, y = value, fill = variable)) +
+                aes(x = bin_centre_cum, y = value, fill = variable)) +
     scale_x_continuous(label = plot_cum$chr, breaks = plot_cum$center) +
     labs( x = 'Chromosome', 
           y = 'SNV varcount in each haplotype',
@@ -993,7 +1038,7 @@ blocks <- test_data[ chr == '15' & pos > 60000000 ,
 
 pdf(paste0(outputs.folder, date, '_chr_15_over8E7_raw_block_data_test.pdf'), width = 15, height = 5)
     ggplot() +
-    geom_point(data = test_data[ chr == '15' & pos > 60000000 & (quality_block) ], shape = 21,
+    geom_point(data = test_data[ chr == '15' & pos > 60000000 & (quality_bin) ], shape = 21,
                 aes(x = pos, y = varcount_tumour, fill = phase)) +
     geom_segment( data = blocks, aes(x = block_start, xend = block_start, y = 0, yend = 100) ) +
     labs( x = 'Chromosome', 
@@ -1006,23 +1051,41 @@ dev.off()
 # loaddss of apparent mis-phasing - is this the same for the refernce sample?
 
 chr_test <- '7'
-pos_start_test <- 80000000
-pos_end_test <- 90000000
+pos_start_test <- 60000000
+pos_end_test <- 160000000
 
 blocks <- phased_muts[ !phase == '' & (early_mut)  & chr == chr_test & pos > pos_start_test & pos < pos_end_test, 
-                     .(block_start = min(pos)), by = block_id ]
+                     .(bin_start = min(pos)), by = bin_id ]
 
-pdf(paste0(outputs.folder, date, '_chr_7_raw_block_data_.pdf'), width = 15, height = 5)
+
+pdf(paste0(outputs.folder, date, '_chr_7_raw_block_data.pdf'), width = 15, height = 5)
     ggplot() +
-    geom_point(data = phased_muts[ !phase == '' & chr == chr_test & pos > pos_start_test & pos < pos_end_test & (quality_block & early_mut) ], shape = 21,
-                aes(x = pos, y = varcount_tumour_corrected / (varcount_tumour_corrected + refcount_tumour) , fill = phase)) +
-    geom_segment( data = blocks, aes(x = block_start, xend = block_start, y = 0, yend = 1) ) +
+    geom_point(data = phased_muts[ !phase == '' & chr == chr_test & pos > pos_start_test & 
+                                    pos < pos_end_test & (early_mut) ], shape = 21,
+                aes(x = pos, y = varcount_tumour_corrected , fill = phase)) +
+    #geom_segment( data = blocks, aes(x = bin_start, xend = bin_start, y = 0, yend = 1), alpha = 0.5, colour = 'grey' ) +
+    #scale_y_continuous( limits = c(0.25,1)) +
+    labs( x = 'Chromosome', 
+          y = 'SNV varcount corrected in each haplotype',
+          fill = 'Phase' ) +
+    theme_bw() +
+    theme( text = element_text( size = 16 ))
+dev.off()
+
+pdf(paste0(outputs.folder, date, '_chr_7_raw_block_data_vaf.pdf'), width = 15, height = 5)
+    ggplot() +
+    geom_point(data = phased_muts[ !phase == '' & chr == chr_test & pos > pos_start_test & 
+                                    pos < pos_end_test & (early_mut) ], shape = 21,
+                aes(x = pos, y = varcount_tumour_corrected/ (varcount_tumour_corrected + refcount_tumour) , fill = phase)) +
+    #geom_segment( data = blocks, aes(x = bin_start, xend = bin_start, y = 0, yend = 1), alpha = 0.5, colour = 'grey' ) +
+    #scale_y_continuous( limits = c(0.25,1)) +
     labs( x = 'Chromosome', 
           y = 'SNV vaf corrected in each haplotype',
           fill = 'Phase' ) +
     theme_bw() +
     theme( text = element_text( size = 16 ))
 dev.off()
+
 
 plot_cn_data <- mut_baf_logR[, .(Start.cummulitive, End.cummulitive, maj_cn, min_cn, tot_cn, chr, start, end) ]
 plot_cn_data <- unique( melt(plot_cn_data, id.vars = c('Start.cummulitive', 'End.cummulitive', 'chr', 'start', 'end'), 
@@ -1034,7 +1097,7 @@ plot_cn_data[, cn := ifelse( cn > 5, 5, cn) ]
 
 plot_cn_data[, cn_plot := ifelse(allele == 'maj_cn', cn + 0.01, ifelse( allele == 'min_cn',  cn - 0.01, cn))]
 
-pdf(paste0(outputs.folder, date, '_R3_ascn.pdf'), width = 15, height = 5)
+pdf(paste0(outputs.folder, date, '_R3_ascn_test.pdf'), width = 15, height = 5)
 ggplot() +
     geom_rect(data = plot_cn_data[ !allele == 'tot_cn' & chr == chr_test & end > pos_start_test & start < pos_end_test ], 
               aes(xmin = Start.cummulitive, xmax = End.cummulitive , ymin = cn_plot, ymax = cn_plot, colour = allele)) +
@@ -1047,6 +1110,35 @@ ggplot() +
     theme( text = element_text( size = 20 ))
 dev.off()
 
+# check snp phasing where looks wrong
+
+plot_data <- bat_snps[ block == 83825235 ]
+
+pdf( paste0(outputs.folder, date, '_SNPphasingtesteg3.pdf') )
+ggplot(plot_data, aes(x = pos, y = baf, colour = gt)) +
+    geom_point() #+
+    #geom_vline( xintercept = incor_phase_mut_positions[1] )
+dev.off()
+
+phased_muts[ block_id == 83825235 ,.(pos, phase, block_id, quality_bin)]
+# still called quality!
+
+## make plots for reference control
+
+plot_data <- melt( mut_baf_logR[, .(chr, bin_centre_cum, hap1=hap1_vaf_cor, hap2=hap2_vaf_cor) ],
+                   id.vars = c('chr', 'bin_centre_cum'))
+
+pdf(paste0(mut_baf_logR, date, '_raw_vafs_across_genome_phased.pdf'), width = 15, height = 5)
+    ggplot(plot_data) +
+    geom_point(aes(x = bin_centre_cum, y = value, colour = variable ), alpha = 0.5 ) +
+    scale_x_continuous(label = plot_cum$chr, breaks = plot_cum$center) +
+    labs( x = 'Chromosome', 
+          y = 'Mutation hap VAF' ) +
+    theme_bw() +
+    theme( text = element_text( size = 20 ))
+dev.off()
+
 #############
 #### END ####
 #############
+
